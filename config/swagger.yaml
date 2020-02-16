@@ -1,0 +1,46 @@
+openapi: 3.0.0
+info:
+  title: Akka test task API
+  description: Arrival test task API
+  version: 0.0.1
+servers:
+  - url: http://localhost:8080/
+    description: Optional server description, e.g. Main (production) server
+paths:
+  /check/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Name to look for
+        schema:
+          type: string
+        example: John
+        allowEmptyValue: false
+    get:
+      summary: Get name status
+      description: If name's present, returns name status. Otherwise, returns Not Found
+      responses:
+        200:
+          $ref: '#/components/responses/nameStatus'
+        404:
+          description: Name not found
+
+components:
+  responses:
+    nameStatus:
+      description: Name, status and time of latest change
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+                example: John
+              status:
+                type: string
+                example: awake
+              since:
+                type: integer
+                example: 162943

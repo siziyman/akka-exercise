@@ -18,15 +18,21 @@ import akka.http.javadsl.server.Route;
 import akka.stream.Materializer;
 import akka.stream.javadsl.Flow;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class HttpServer extends AllDirectives {
-    private static final Duration defaultTimeout = Duration.ofMillis(350000000);
+    private static final Duration defaultTimeout = Duration.ofMillis(5000);
+    private static final String HELP = "This app starts a server with set names and statuses and allows you to check their status.\n" +
+            "Available configuration flags:\n" +
+            "-p <port> - port to listen at. MANDATORY\n" +
+            "-n <name> [, name]... - comma-separated list of names. Optional: default list is John, Alex, Juan, Alejandro\n" +
+            "-s <status> [, status]... - comma-separated list of statuses. Optional: default list is awake, asleep";
+    private static final String HOST = "localhost";
     private final HashMap<String, ActorRef<NameActor.Command>> map = new HashMap<>();
     private final ActorContext<NameActor.NameStatus> context;
     private final Config config;
@@ -37,10 +43,12 @@ public class HttpServer extends AllDirectives {
         initActors();
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
         var parsed = Config.parseConfigFromArgs(args);
-        var config = parsed.orElse(Config.DEFAULT_CFG);
-        ActorSystem.create(HttpServer.create(config), "HTTPServer");
+        parsed.ifPresentOrElse(
+                config1 -> ActorSystem.create(HttpServer.create(config1), "HTTPServer"),
+                () -> System.err.println("ERROR: Invalid config supplied\n" + HELP));
+//        ActorSystem.create();
     }
 
     private static Behavior<NameActor.NameStatus> create(Config config) {
@@ -55,22 +63,15 @@ public class HttpServer extends AllDirectives {
             map.put(name, spawnedNameActor);
         }
     }
-//
-//    private CompletionStage<NameActor.NameRequest> getName(String name, Duration timeout, Scheduler scheduler) {
-//        return new CompletableFuture<>()
-//    }
 
-    private void startHttpServer(ActorSystem<Void> system, Config config) throws IOException {
+    private void startHttpServer(ActorSystem<Void> system, Config config) {
         final Http http = Http.get(system.classicSystem());
 
-        final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = this.createRoute(context.getSystem()).flow(system.classicSystem(), Materializer.matFromSystem(system));
+        final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = this.createRoute().flow(system.classicSystem(), Materializer.matFromSystem(system));
         final CompletionStage<ServerBinding> binding = http.bindAndHandle(routeFlow,
-                ConnectHttp.toHost("localhost", config.listenPort), Materializer.matFromSystem(system));
+                ConnectHttp.toHost(HOST, config.listenPort), Materializer.matFromSystem(system));
 
-        System.out.printf("Server online at http://localhost:%d/", config.listenPort);
-//        binding
-//                .thenCompose(ServerBinding::unbind)
-//                .thenAccept(unbound -> system.terminate());
+        system.log().info("Server online at http://{}:{}/", HOST, config.listenPort);
     }
 
     private CompletionStage<NameActor.NameStatusResponse> askNameStatus(String name) {
@@ -81,12 +82,12 @@ public class HttpServer extends AllDirectives {
         return AskPattern.ask(commandActorRef, NameActor.NameRequest::new, defaultTimeout, context.getSystem().scheduler());
     }
 
-    private Behavior<NameActor.NameStatus> behavior() throws IOException {
+    private Behavior<NameActor.NameStatus> behavior() {
         startHttpServer(this.context.getSystem(), this.config);
         return Behaviors.empty();
     }
 
-    private Route createRoute(akka.actor.typed.ActorSystem<?> system) {
+    private Route createRoute() {
         return pathPrefix("check", () -> path(PathMatchers.segment(), (String name) -> get(() -> rejectEmptyResponse(() ->
                 onSuccess(askNameStatus(name), status -> complete(String.valueOf(status))))
         ))).seal();
@@ -125,8 +126,8 @@ public class HttpServer extends AllDirectives {
             var nameVisited = false;
             var statusVisited = false;
             var port = DEFAULT_PORT;
-            Set<String> statusList = new HashSet<>();
-            Set<String> namesList = new HashSet<>();
+            Set<String> statusSet = new HashSet<>();
+            Set<String> nameSet = new HashSet<>();
             int i = 0;
             while (i < args.length) {
                 switch (args[i]) {
@@ -147,39 +148,41 @@ public class HttpServer extends AllDirectives {
                         if (nameVisited) {
                             return Optional.empty();
                         }
-                        i = fillNamesFromArgs(namesList, args, i, STATUS_KEY);
+                        i = fillNamesFromArgs(nameSet, args, i, STATUS_KEY);
                         nameVisited = true;
                         break;
                     case STATUS_KEY:
                         if (statusVisited) {
                             return Optional.empty();
                         }
-                        i = fillNamesFromArgs(statusList, args, i, NAME_KEY);
+                        i = fillNamesFromArgs(statusSet, args, i, NAME_KEY);
                         statusVisited = true;
                         break;
                 }
             }
-            if (statusList.isEmpty()) {
-                statusList = Set.copyOf(DEFAULT_STATUSES);
-            }
-            if (namesList.isEmpty()) {
-                namesList = Set.copyOf(DEFAULT_NAMES);
-            }
             if (!portVisited) {
+                // port is mandatory
                 return Optional.empty();
             }
-            return Optional.of(new Config(port, namesList, statusList));
+            if (nameSet.isEmpty()) {
+                // lists are optional, we can just provide defaults
+                nameSet = Set.copyOf(DEFAULT_NAMES);
+            }
+            if (statusSet.isEmpty()) {
+                statusSet = Set.copyOf(DEFAULT_STATUSES);
+            }
+            return Optional.of(new Config(port, nameSet, statusSet));
         }
 
-        //fill set of names from args list; this parsing implementation is "tolerant" to tailing comma in the list.
+        //fill set of names from args list; this parsing implementation is "tolerant" to tailing comma in the list or missing spaces between args. Not the most efficient.
         private static int fillNamesFromArgs(Set<String> setToFill, String[] args, int startIndex, String keyToAvoid) {
             int j = startIndex + 1;
             while (args.length > j && !(args[j].equals(PORT_KEY) || args[j].equals(keyToAvoid))) {
-                var strCandidate = args[j];
-                if (strCandidate.endsWith(",")) {
-                    strCandidate = strCandidate.substring(0, strCandidate.length() - 1);
+                var stringToParse = args[j];
+                if (stringToParse.contains(",")) {
+                    setToFill.addAll(Arrays.stream(stringToParse.split(",")).filter(it -> !it.isEmpty()).collect(Collectors.toUnmodifiableList()));
                 }
-                setToFill.add(strCandidate);
+                setToFill.add(stringToParse);
                 j++;
             }
             startIndex = j;

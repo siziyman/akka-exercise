@@ -26,13 +26,15 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class HttpServer extends AllDirectives {
-    private static final Duration defaultTimeout = Duration.ofMillis(5000);
+
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(5000);
     private static final String HELP = "This app starts a server with set names and statuses and allows you to check their status.\n" +
             "Available configuration flags:\n" +
             "-p <port> - port to listen at. MANDATORY\n" +
             "-n <name> [, name]... - comma-separated list of names. Optional: default list is John, Alex, Juan, Alejandro\n" +
             "-s <status> [, status]... - comma-separated list of statuses. Optional: default list is awake, asleep";
     private static final String HOST = "localhost";
+
     private final HashMap<String, ActorRef<NameActor.Command>> map = new HashMap<>();
     private final ActorContext<NameActor.NameStatus> context;
     private final Config config;
@@ -44,11 +46,10 @@ public class HttpServer extends AllDirectives {
     }
 
     public static void main(String[] args) {
-        var parsed = Config.parseConfigFromArgs(args);
+        final var parsed = Config.parseConfigFromArgs(args);
         parsed.ifPresentOrElse(
-                config1 -> ActorSystem.create(HttpServer.create(config1), "HTTPServer"),
+                config -> ActorSystem.create(HttpServer.create(config), "HTTPServer"),
                 () -> System.err.println("ERROR: Invalid config supplied\n" + HELP));
-//        ActorSystem.create();
     }
 
     private static Behavior<NameActor.NameStatus> create(Config config) {
@@ -79,7 +80,7 @@ public class HttpServer extends AllDirectives {
         if (commandActorRef == null) {
             return CompletableFuture.completedFuture(new NameActor.NameStatusResponse(Optional.empty()));
         }
-        return AskPattern.ask(commandActorRef, NameActor.NameRequest::new, defaultTimeout, context.getSystem().scheduler());
+        return AskPattern.ask(commandActorRef, NameActor.NameRequest::new, DEFAULT_TIMEOUT, context.getSystem().scheduler());
     }
 
     private Behavior<NameActor.NameStatus> behavior() {
@@ -88,17 +89,24 @@ public class HttpServer extends AllDirectives {
     }
 
     private Route createRoute() {
-        return pathPrefix("check", () -> path(PathMatchers.segment(), (String name) -> get(() -> rejectEmptyResponse(() ->
-                onSuccess(askNameStatus(name), status -> complete(String.valueOf(status))))
-        ))).seal();
+        return pathPrefix("check",
+                () -> path(PathMatchers.segment(),
+                        (String name) -> get(
+                                () -> rejectEmptyResponse(
+                                        () -> onSuccess(askNameStatus(name), status -> complete(String.valueOf(status)))
+                                )
+                        )
+                )
+        ).seal();
     }
+
 
 
     private static final class Config {
         private static final List<String> DEFAULT_NAMES = List.of("John", "Alex", "Juan", "Alejandro");
         private static final List<String> DEFAULT_STATUSES = List.of("asleep", "awake");
         private static final int DEFAULT_PORT = 8080;
-
+        //not used, but can be provided, if default behavior convention changes
         private static final Config DEFAULT_CFG = new Config(DEFAULT_PORT, Set.copyOf(DEFAULT_NAMES), Set.copyOf(DEFAULT_STATUSES));
 
         private static final Pattern PORT_PATTERN = Pattern.compile("^\\d{1,5}$"); // it will be converted back to string, but compiling pattern helps with validating correctness
@@ -108,6 +116,7 @@ public class HttpServer extends AllDirectives {
         private static final String STATUS_KEY = "-s";
 
         private static final int MAX_PORT = 65535;
+
         public final int listenPort;
         public final Set<String> names;
         public final Set<String> statuses;
@@ -136,7 +145,7 @@ public class HttpServer extends AllDirectives {
                             return Optional.empty();
                         }
                         if (args.length > i + 1 && args[i + 1].matches(PORT_PATTERN.pattern())) {
-                            var portCandidate = Integer.parseUnsignedInt(args[i + 1]);
+                            final var portCandidate = Integer.parseUnsignedInt(args[i + 1]);
                             if (portCandidate <= MAX_PORT) {
                                 port = portCandidate;
                             }
@@ -178,7 +187,7 @@ public class HttpServer extends AllDirectives {
         private static int fillNamesFromArgs(Set<String> setToFill, String[] args, int startIndex, String keyToAvoid) {
             int j = startIndex + 1;
             while (args.length > j && !(args[j].equals(PORT_KEY) || args[j].equals(keyToAvoid))) {
-                var stringToParse = args[j];
+                final var stringToParse = args[j];
                 if (stringToParse.contains(",")) {
                     setToFill.addAll(Arrays.stream(stringToParse.split(",")).filter(it -> !it.isEmpty()).collect(Collectors.toUnmodifiableList()));
                 }

@@ -29,6 +29,8 @@ public class HttpServer extends AllDirectives {
 
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(5000);
     private static final String HELP = "This app starts a server with set names and statuses and allows you to check their status.\n" +
+            "Available commands: \n" +
+            "help/-h - display this help. \n" +
             "Available configuration flags:\n" +
             "-p <port> - port to listen at. MANDATORY\n" +
             "-n <name> [, name]... - comma-separated list of names. Optional: default list is John, Alex, Juan, Alejandro\n" +
@@ -46,6 +48,10 @@ public class HttpServer extends AllDirectives {
     }
 
     public static void main(String[] args) {
+        if (args.length > 0 && (args[0].equals("help") || args[0].equals("-h"))) {
+            System.out.println(HELP);
+            return;
+        }
         final var parsed = Config.parseConfigFromArgs(args);
         parsed.ifPresentOrElse(
                 config -> ActorSystem.create(HttpServer.create(config), "HTTPServer"),
@@ -99,7 +105,6 @@ public class HttpServer extends AllDirectives {
                 )
         ).seal();
     }
-
 
 
     private static final class Config {
